@@ -1,0 +1,74 @@
+services:
+  garage:
+    image: dxflrs/garage:v0.9.1
+    restart: unless-stopped
+    ports:
+      - "3900:3900"
+      - "3901:3901"
+      - "3902:3902"
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+    healthcheck:
+      test: [ "CMD", "/garage", "-c", "/etc/garage.toml", "status" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  garage-setup:
+    image: alpine:latest
+    depends_on:
+      garage:
+        condition: service_healthy
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - ./setup.sh:/setup.sh:ro
+      - garage_meta:/var/lib/garage/meta
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+    command: >
+      /bin/sh -c " for i in 1 2 3 4 5; do apk add --no-cache curl && break || sleep 5; done && curl -L https://garagehq.deuxfleurs.fr/_releases/v0.9.1/x86_64-unknown-linux-musl/garage -o /garage && chmod +x /garage && /setup.sh "
+
+  receiver:
+    build: .
+    command: [ "/usr/local/bin/receiver" ]
+    depends_on:
+      garage-setup:
+        condition: service_completed_successfully
+    deploy:
+      replicas: 1
+    environment:
+      PORT: ${PORT:-3000}
+      ADVERTISED_HOST: receiver
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_REGION: ${S3_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      RUST_LOG: ${RUST_LOG:-info}
+
+  sender:
+    build: .
+    command: [ "/usr/local/bin/sender" ]
+    depends_on:
+      garage-setup:
+        condition: service_completed_successfully
+    environment:
+      PORT: ${PORT:-3000}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_REGION: ${S3_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "8080:${PORT:-3000}"
+
+volumes:
+  garage_meta:
+  garage_data:
