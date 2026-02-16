@@ -54,7 +54,10 @@ impl DataWriter {
         let ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
         let contents: Vec<String> = records.iter().map(|r| r.content.clone()).collect();
         let senders: Vec<Option<String>> = records.iter().map(|r| r.sender_id.clone()).collect();
-        let timestamps: Vec<i64> = records.iter().map(|r| r.timestamp.timestamp_nanos_opt().unwrap_or(0)).collect();
+        let timestamps: Vec<i64> = records
+            .iter()
+            .map(|r| r.timestamp.timestamp_nanos_opt().unwrap_or(0))
+            .collect();
 
         let id_array = StringArray::from(ids);
         let content_array = StringArray::from(contents);
@@ -65,7 +68,11 @@ impl DataWriter {
             Field::new("id", DataType::Utf8, false),
             Field::new("content", DataType::Utf8, false),
             Field::new("sender_id", DataType::Utf8, true),
-            Field::new("timestamp", DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())), false),
+            Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                false,
+            ),
         ]);
 
         let batch = RecordBatch::try_new(
@@ -87,12 +94,20 @@ impl DataWriter {
         let now = Utc::now();
         let key = format!(
             "data/messages/year={}/month={:02}/day={:02}/{}.parquet",
-            now.format("%Y"), now.format("%m"), now.format("%d"), Uuid::new_v4()
+            now.format("%Y"),
+            now.format("%m"),
+            now.format("%d"),
+            Uuid::new_v4()
         );
 
         self.garage_client.upload_data(&key, cursor).await?;
 
-        tracing::info!("Flushed {} records to s3://{}/{}", records.len(), "bucket", key);
+        tracing::info!(
+            "Flushed {} records to s3://{}/{}",
+            records.len(),
+            "bucket",
+            key
+        );
 
         Ok(())
     }

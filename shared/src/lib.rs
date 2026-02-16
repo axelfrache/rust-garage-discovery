@@ -25,13 +25,8 @@ impl GarageClient {
         let access_key = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
         let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default();
 
-        let credentials_provider = Credentials::new(
-            access_key,
-            secret_key,
-            None,
-            None,
-            "environment",
-        );
+        let credentials_provider =
+            Credentials::new(access_key, secret_key, None, None, "environment");
 
         let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .region(region_provider)
@@ -134,7 +129,10 @@ impl GarageClient {
         Ok(services)
     }
 
-    pub fn monitor_services(&self, interval_duration: std::time::Duration) -> impl tokio_stream::Stream<Item = Vec<ServiceRegistration>> + '_ {
+    pub fn monitor_services(
+        &self,
+        interval_duration: std::time::Duration,
+    ) -> impl tokio_stream::Stream<Item = Vec<ServiceRegistration>> + '_ {
         async_stream::stream! {
             let mut interval = tokio::time::interval(interval_duration);
             loop {

@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let receivers = Arc::new(RwLock::new(Vec::new()));
 
     use tokio_stream::StreamExt;
-    
+
     let receivers_clone = receivers.clone();
     let garage_clone = garage_client.clone();
     tokio::spawn(async move {
@@ -109,9 +109,10 @@ async fn send_message(
             "sender_id": "sender-1",
         });
 
-        let result = state.circuit_breaker.call(|| async {
-            state.http_client.post(&url).json(&msg).send().await
-        }).await;
+        let result = state
+            .circuit_breaker
+            .call(|| async { state.http_client.post(&url).json(&msg).send().await })
+            .await;
 
         match result {
             Ok(_response) => Json(SendResponse {
@@ -119,21 +120,21 @@ async fn send_message(
                 receiver_id: Some(receiver.id),
             }),
             Err(e) => match e {
-                 circuit_breaker::Error::CircuitOpen => {
-                     warn!("Circuit breaker open for {}", receiver.id);
-                     Json(SendResponse {
+                circuit_breaker::Error::CircuitOpen => {
+                    warn!("Circuit breaker open for {}", receiver.id);
+                    Json(SendResponse {
                         status: "circuit_open".to_string(),
                         receiver_id: Some(receiver.id),
                     })
-                 },
-                 circuit_breaker::Error::Inner(inner_e) => {
+                }
+                circuit_breaker::Error::Inner(inner_e) => {
                     error!("Failed to send to {}: {}", receiver.id, inner_e);
                     Json(SendResponse {
                         status: "failed".to_string(),
                         receiver_id: Some(receiver.id),
                     })
-                 }
-            }
+                }
+            },
         }
     } else {
         warn!("No receivers available");
