@@ -12,10 +12,14 @@ use std::sync::{Arc, RwLock};
 use tokio::time::{self, Duration};
 use tracing::{error, info, warn};
 
+mod circuit_breaker;
+use circuit_breaker::CircuitBreaker;
+
 #[derive(Clone)]
 struct AppState {
     receivers: Arc<RwLock<Vec<ServiceRegistration>>>,
     http_client: HttpClient,
+    circuit_breaker: Arc<CircuitBreaker>,
 }
 
 #[tokio::main]
@@ -34,23 +38,21 @@ async fn main() -> anyhow::Result<()> {
 
     let receivers = Arc::new(RwLock::new(Vec::new()));
 
+    use tokio_stream::StreamExt;
+    
     let receivers_clone = receivers.clone();
     let garage_clone = garage_client.clone();
     tokio::spawn(async move {
-        let mut interval = time::interval(Duration::from_secs(10));
-        loop {
-            interval.tick().await;
-            match garage_clone.discover_services().await {
-                Ok(services) => {
-                    info!("Discovered {} receivers", services.len());
-                    if let Ok(mut writer) = receivers_clone.write() {
-                        *writer = services;
-                    }
-                }
-                Err(e) => error!("Failed to discover services: {}", e),
+        let mut stream = std::pin::pin!(garage_clone.monitor_services(Duration::from_secs(10)));
+        while let Some(services) = stream.next().await {
+            info!("Discovered {} receivers", services.len());
+            if let Ok(mut writer) = receivers_clone.write() {
+                *writer = services;
             }
         }
     });
+
+    let circuit_breaker = CircuitBreaker::new(3, Duration::from_secs(10));
 
     let state = AppState {
         receivers,
@@ -58,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
             .timeout(Duration::from_secs(2))
             .build()
             .unwrap(),
+        circuit_breaker: Arc::new(circuit_breaker),
     };
 
     let app = Router::new()
@@ -106,17 +109,30 @@ async fn send_message(
             "sender_id": "sender-1",
         });
 
-        match state.http_client.post(&url).json(&msg).send().await {
-            Ok(_) => Json(SendResponse {
+        let result = state.circuit_breaker.call(|| async {
+            state.http_client.post(&url).json(&msg).send().await
+        }).await;
+
+        match result {
+            Ok(_response) => Json(SendResponse {
                 status: "sent".to_string(),
                 receiver_id: Some(receiver.id),
             }),
-            Err(e) => {
-                error!("Failed to send to {}: {}", receiver.id, e);
-                Json(SendResponse {
-                    status: "failed".to_string(),
-                    receiver_id: Some(receiver.id),
-                })
+            Err(e) => match e {
+                 circuit_breaker::Error::CircuitOpen => {
+                     warn!("Circuit breaker open for {}", receiver.id);
+                     Json(SendResponse {
+                        status: "circuit_open".to_string(),
+                        receiver_id: Some(receiver.id),
+                    })
+                 },
+                 circuit_breaker::Error::Inner(inner_e) => {
+                    error!("Failed to send to {}: {}", receiver.id, inner_e);
+                    Json(SendResponse {
+                        status: "failed".to_string(),
+                        receiver_id: Some(receiver.id),
+                    })
+                 }
             }
         }
     } else {

@@ -11,12 +11,16 @@ use tokio::time::{self, Duration};
 use tracing::{error, info};
 use uuid::Uuid;
 
+mod data_writer;
+use data_writer::{DataWriter, MessageRecord};
+
 #[derive(Clone)]
 struct AppState {
     garage_client: Arc<GarageClient>,
     service_id: String,
     host: String,
     port: u16,
+    data_writer: Arc<DataWriter>,
 }
 
 #[tokio::main]
@@ -41,6 +45,8 @@ async fn main() -> anyhow::Result<()> {
         error!("Failed to ensure bucket exists: {}", e);
     }
 
+    let data_writer = Arc::new(DataWriter::new(garage_client.clone()));
+
     let host = if let Ok(h) = std::env::var("ADVERTISED_HOST") {
         h
     } else if let Ok(hostname) = std::env::var("HOSTNAME") {
@@ -58,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
         service_id: service_id.clone(),
         host: host.clone(),
         port,
+        data_writer,
     };
 
     let state_clone = state.clone();
@@ -89,7 +96,8 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(health_check))
-        .route("/messages", post(receive_message));
+        .route("/messages", post(receive_message))
+        .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Listening on {}", addr);
@@ -109,10 +117,23 @@ struct Message {
     sender_id: Option<String>,
 }
 
-async fn receive_message(Json(payload): Json<Message>) -> &'static str {
+async fn receive_message(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    Json(payload): Json<Message>,
+) -> &'static str {
     info!(
         "Received message from {:?}: {}",
         payload.sender_id, payload.content
     );
+
+    let record = MessageRecord {
+        id: Uuid::new_v4().to_string(),
+        content: payload.content,
+        sender_id: payload.sender_id,
+        timestamp: Utc::now(),
+    };
+
+    state.data_writer.push(record).await;
+
     "Message received"
 }

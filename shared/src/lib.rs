@@ -124,15 +124,37 @@ impl GarageClient {
                             .unwrap_or_default();
                         if let Ok(service) = serde_json::from_slice::<ServiceRegistration>(&data) {
                             services.push(service);
-                        } else {
                         }
                     }
-                    Err(_) => {
-                    }
+                    Err(_) => {}
                 }
             }
         }
 
         Ok(services)
+    }
+
+    pub fn monitor_services(&self, interval_duration: std::time::Duration) -> impl tokio_stream::Stream<Item = Vec<ServiceRegistration>> + '_ {
+        async_stream::stream! {
+            let mut interval = tokio::time::interval(interval_duration);
+            loop {
+                interval.tick().await;
+                if let Ok(services) = self.discover_services().await {
+                    yield services;
+                }
+            }
+        }
+    }
+
+    pub async fn upload_data(&self, key: &str, data: Vec<u8>) -> Result<()> {
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .body(data.into())
+            .send()
+            .await
+            .context("Failed to upload data")?;
+        Ok(())
     }
 }
